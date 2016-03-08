@@ -1,0 +1,12 @@
+//
+//  Base.xcconfig
+//  QLVision
+//
+//  Created by LIU Can on 16/3/8.
+//  Copyright © 2016年 CuiYu. All rights reserved.
+//
+GCC_PRECOMPILE_PREFIX_HEADER = YES
+GCC_PREFIX_HEADER = $(TARGET_NAME)/PrefixHeader.pch
+
+CLANG_ENABLE_OBJC_ARC = YES
+ENABLE_BITCODE = NO
