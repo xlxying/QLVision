@@ -29,6 +29,18 @@ typedef NS_ENUM(NSInteger, QLCameraOrientation) {
     QLCameraOrientationLandscapeLeft = AVCaptureVideoOrientationLandscapeLeft,
 };
 
+typedef NS_ENUM(NSInteger, QLFocusMode) {
+    QLFocusModeLocked = AVCaptureFocusModeLocked,
+    QLFocusModeAutoFocus = AVCaptureFocusModeAutoFocus,
+    QLFocusModeContinuousAutoFocus = AVCaptureFocusModeContinuousAutoFocus
+};
+
+typedef NS_ENUM(NSInteger, QLExposureMode) {
+    QLExposureModeLocked = AVCaptureExposureModeLocked,
+    QLExposureModeAutoExpose = AVCaptureExposureModeAutoExpose,
+    QLExposureModeContinuousAutoExposure = AVCaptureExposureModeContinuousAutoExposure
+};
+
 typedef NS_ENUM(NSInteger, QLOutputFormat) {
     QLOutputFormatPreset = 0,
     QLOutputFormatSquare, // 1:1
@@ -36,7 +48,7 @@ typedef NS_ENUM(NSInteger, QLOutputFormat) {
     QLOutputFormatStandard // 4:3
 };
 
-// PBJError
+// QLError
 
 extern NSString * const QLVisionErrorDomain;
 
@@ -49,6 +61,13 @@ typedef NS_ENUM(NSInteger, QLVisionErrorType)
     QLVisionErrorOutputFileExists = 103,
     QLVisionErrorCaptureFailed = 104,
 };
+
+// photo dictionary keys
+
+extern NSString * const QLVisionPhotoMetadataKey;
+extern NSString * const QLVisionPhotoJPEGKey;
+extern NSString * const QLVisionPhotoImageKey;
+extern NSString * const QLVisionPhotoThumbnailKey; // 160x120
 
 @protocol QLVisionDelegate;
 @interface QLVision : NSObject
@@ -91,6 +110,22 @@ typedef NS_ENUM(NSInteger, QLVisionErrorType)
 - (void)freezePreview;
 - (void)unfreezePreview;
 
+// focus, exposure, white balance
+
+// note: focus and exposure modes change when adjusting on point
+- (BOOL)isFocusPointOfInterestSupported;
+- (void)focusExposeAndAdjustWhiteBalanceAtAdjustedPoint:(CGPoint)adjustedPoint;
+
+@property (nonatomic) QLFocusMode focusMode;
+@property (nonatomic, readonly, getter=isFocusLockSupported) BOOL focusLockSupported;
+- (void)focusAtAdjustedPointOfInterest:(CGPoint)adjustedPoint;
+- (BOOL)isAdjustingFocus;
+
+@property (nonatomic) QLExposureMode exposureMode;
+@property (nonatomic, readonly, getter=isExposureLockSupported) BOOL exposureLockSupported;
+- (void)exposeAtAdjustedPointOfInterest:(CGPoint)adjustedPoint;
+- (BOOL)isAdjustingExposure;
+
 // photo
 
 @property (nonatomic, readonly) BOOL canCapturePhoto;
@@ -119,6 +154,14 @@ typedef NS_ENUM(NSInteger, QLVisionErrorType)
 
 - (void)visionOutputFormatWillChange:(QLVision *)vision;
 - (void)visionOutputFormatDidChange:(QLVision *)vision;
+
+// focus / exposure
+
+- (void)visionWillStartFocus:(QLVision *)vision;
+- (void)visionDidStopFocus:(QLVision *)vision;
+
+- (void)visionWillChangeExposure:(QLVision *)vision;
+- (void)visionDidChangeExposure:(QLVision *)vision;
 
 
 // preview

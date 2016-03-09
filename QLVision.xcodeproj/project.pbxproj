@@ -19,6 +19,10 @@
 		414E48041C8E77EE0032A5FC /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 414E48031C8E77EE0032A5FC /* UIKit.framework */; };
 		414E48071C8E78CE0032A5FC /* QLVision.m in Sources */ = {isa = PBXBuildFile; fileRef = 414E48061C8E78CE0032A5FC /* QLVision.m */; };
 		414E480A1C8ED6890032A5FC /* QLVisionUtilities.m in Sources */ = {isa = PBXBuildFile; fileRef = 414E48091C8ED6890032A5FC /* QLVisionUtilities.m */; };
+		414E480C1C8FF84A0032A5FC /* ImageIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 414E480B1C8FF84A0032A5FC /* ImageIO.framework */; };
+		414E480E1C8FF84F0032A5FC /* CoreImage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 414E480D1C8FF84F0032A5FC /* CoreImage.framework */; };
+		414E48111C901BAC0032A5FC /* RecordView.m in Sources */ = {isa = PBXBuildFile; fileRef = 414E48101C901BAC0032A5FC /* RecordView.m */; };
+		414E48161C901E590032A5FC /* UIColor+Hex.m in Sources */ = {isa = PBXBuildFile; fileRef = 414E48151C901E590032A5FC /* UIColor+Hex.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,6 +67,12 @@
 		414E48061C8E78CE0032A5FC /* QLVision.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = QLVision.m; sourceTree = "<group>"; };
 		414E48081C8ED6890032A5FC /* QLVisionUtilities.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = QLVisionUtilities.h; sourceTree = "<group>"; };
 		414E48091C8ED6890032A5FC /* QLVisionUtilities.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = QLVisionUtilities.m; sourceTree = "<group>"; };
+		414E480B1C8FF84A0032A5FC /* ImageIO.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ImageIO.framework; path = System/Library/Frameworks/ImageIO.framework; sourceTree = SDKROOT; };
+		414E480D1C8FF84F0032A5FC /* CoreImage.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreImage.framework; path = System/Library/Frameworks/CoreImage.framework; sourceTree = SDKROOT; };
+		414E480F1C901BAC0032A5FC /* RecordView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = RecordView.h; sourceTree = "<group>"; };
+		414E48101C901BAC0032A5FC /* RecordView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = RecordView.m; sourceTree = "<group>"; };
+		414E48141C901DC70032A5FC /* UIColor+Hex.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "UIColor+Hex.h"; sourceTree = "<group>"; };
+		414E48151C901E590032A5FC /* UIColor+Hex.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = "UIColor+Hex.m"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -70,6 +80,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				414E480E1C8FF84F0032A5FC /* CoreImage.framework in Frameworks */,
+				414E480C1C8FF84A0032A5FC /* ImageIO.framework in Frameworks */,
 				414E48041C8E77EE0032A5FC /* UIKit.framework in Frameworks */,
 				414E48021C8E77EA0032A5FC /* AVFoundation.framework in Frameworks */,
 				414E48001C8E77E50032A5FC /* MobileCoreServices.framework in Frameworks */,
@@ -96,6 +108,8 @@
 		414E47BD1C8E753C0032A5FC = {
 			isa = PBXGroup;
 			children = (
+				414E480D1C8FF84F0032A5FC /* CoreImage.framework */,
+				414E480B1C8FF84A0032A5FC /* ImageIO.framework */,
 				414E48031C8E77EE0032A5FC /* UIKit.framework */,
 				414E48011C8E77EA0032A5FC /* AVFoundation.framework */,
 				414E47FF1C8E77E50032A5FC /* MobileCoreServices.framework */,
@@ -119,6 +133,7 @@
 		414E47C81C8E753C0032A5FC /* QLVision */ = {
 			isa = PBXGroup;
 			children = (
+				414E48121C901D7B0032A5FC /* Util */,
 				414E47FE1C8E77330032A5FC /* QLVision */,
 				414E47CC1C8E753C0032A5FC /* AppDelegate.h */,
 				414E47CD1C8E753C0032A5FC /* AppDelegate.m */,
@@ -128,6 +143,8 @@
 				414E47D71C8E753C0032A5FC /* LaunchScreen.storyboard */,
 				414E47DA1C8E753C0032A5FC /* Info.plist */,
 				414E47C91C8E753C0032A5FC /* Supporting Files */,
+				414E480F1C901BAC0032A5FC /* RecordView.h */,
+				414E48101C901BAC0032A5FC /* RecordView.m */,
 			);
 			path = QLVision;
 			sourceTree = "<group>";
@@ -169,6 +186,15 @@
 				414E48091C8ED6890032A5FC /* QLVisionUtilities.m */,
 			);
 			path = QLVision;
+			sourceTree = "<group>";
+		};
+		414E48121C901D7B0032A5FC /* Util */ = {
+			isa = PBXGroup;
+			children = (
+				414E48141C901DC70032A5FC /* UIColor+Hex.h */,
+				414E48151C901E590032A5FC /* UIColor+Hex.m */,
+			);
+			path = Util;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -304,7 +330,9 @@
 				414E480A1C8ED6890032A5FC /* QLVisionUtilities.m in Sources */,
 				414E47CE1C8E753C0032A5FC /* AppDelegate.m in Sources */,
 				414E48071C8E78CE0032A5FC /* QLVision.m in Sources */,
+				414E48161C901E590032A5FC /* UIColor+Hex.m in Sources */,
 				414E47CB1C8E753C0032A5FC /* main.m in Sources */,
+				414E48111C901BAC0032A5FC /* RecordView.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
