@@ -27,13 +27,15 @@
     UILongPressGestureRecognizer *_longPressGestureRecognizer;
     UITapGestureRecognizer *_focusTapGestureRecognizer;
     UITapGestureRecognizer *_photoTapGestureRecognizer;
+    
+    BOOL _recording;
 }
 @end
 
 @implementation ViewController
 - (void)dealloc
 {
-//    [UIApplication sharedApplication].idleTimerDisabled = NO;
+    [UIApplication sharedApplication].idleTimerDisabled = NO;
     _longPressGestureRecognizer.delegate = nil;
     _focusTapGestureRecognizer.delegate = nil;
     _photoTapGestureRecognizer.delegate = nil;
@@ -61,11 +63,25 @@
     _recordView.percent = 1;
     [_recordView setUserInteractionEnabled:YES];
     
+    // touch to record
+    _longPressGestureRecognizer = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(_handleLongPressGestureRecognizer:)];
+    _longPressGestureRecognizer.delegate = self;
+    _longPressGestureRecognizer.minimumPressDuration = 0.05f;
+    _longPressGestureRecognizer.allowableMovement = 10.0f;
+    [_recordView addGestureRecognizer:_longPressGestureRecognizer];
+    
+    // tap to focus
+    _focusTapGestureRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(_handleFocusTapGesterRecognizer:)];
+    _focusTapGestureRecognizer.delegate = self;
+    _focusTapGestureRecognizer.numberOfTapsRequired = 1;
+    _focusTapGestureRecognizer.enabled = NO;
+    [_previewView addGestureRecognizer:_focusTapGestureRecognizer];
+    
     // tap to focus
     _photoTapGestureRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(_handlePhotoTapGesterRecognizer:)];
     _photoTapGestureRecognizer.delegate = self;
     _photoTapGestureRecognizer.numberOfTapsRequired = 1;
-    _photoTapGestureRecognizer.enabled = YES;
+    _photoTapGestureRecognizer.enabled = NO;
     [_recordView addGestureRecognizer:_photoTapGestureRecognizer];
 }
 
@@ -89,23 +105,49 @@
     [[QLVision sharedInstance] stopPreview];
 }
 
+- (void)_startCapture
+{
+    //让程序不锁屏
+    [UIApplication sharedApplication].idleTimerDisabled = YES;
+    
+    [_recordView setFrame:CGRectMake((MOZWIDTH-96.0)/2, MOZHEIGHT-10.0-96.0, 96.0, 96.0)];
+    _recordView.arcBackColor = [UIColor colorWithHexString:@"#DA3A3A"];
+    [_recordView startAnim];
+//    [UIView animateWithDuration:0.2f delay:0 options:UIViewAnimationOptionCurveEaseInOut animations:^{
+//        _instructionLabel.alpha = 0;
+//        _instructionLabel.transform = CGAffineTransformMakeTranslation(0, 10.0f);
+//    } completion:^(BOOL finished) {
+//    }];
+    [[QLVision sharedInstance] startVideoCapture];
+}
+
 - (void)_resetCapture
 {
     
     QLVision *vision = [QLVision sharedInstance];
     vision.delegate = self;
     
-    vision.cameraMode = QLCameraModePhoto;
-    //vision.cameraMode = PBJCameraModePhoto; // PHOTO: uncomment to test photo capture
+//    vision.cameraMode = QLCameraModePhoto;
+    vision.cameraMode = QLCameraModeVideo; // PHOTO: uncomment to test photo capture
     vision.cameraOrientation = QLCameraOrientationPortrait;
     vision.focusMode = QLFocusModeContinuousAutoFocus;
     vision.outputFormat = QLOutputFormatPreset;
-    vision.captureSessionPreset = AVCaptureSessionPresetPhoto;
-//    vision.videoRenderingEnabled = YES;
-//    vision.additionalCompressionProperties = @{AVVideoProfileLevelKey : AVVideoProfileLevelH264Baseline30}; // AVVideoProfileLevelKey requires specific captureSessionPreset
+    vision.captureSessionPreset = AVCaptureSessionPreset640x480;
+    vision.videoRenderingEnabled = YES;
+    vision.additionalCompressionProperties = @{AVVideoProfileLevelKey : AVVideoProfileLevelH264Baseline30}; // AVVideoProfileLevelKey requires specific captureSessionPreset
     
     // specify a maximum duration with the following property
-    // vision.maximumCaptureDuration = CMTimeMakeWithSeconds(5, 600); // ~ 5 seconds
+     vision.maximumCaptureDuration = CMTimeMakeWithSeconds(60, 600); // ~ 60 seconds
+}
+
+- (void)_endCapture
+{
+    [UIApplication sharedApplication].idleTimerDisabled = NO;
+    [_recordView setFrame:CGRectMake((MOZWIDTH-76.0)/2, MOZHEIGHT-20.0-76.0, 76.0, 76.0)];
+    _recordView.arcBackColor = [UIColor colorWithHexString:@"#FFFFFF"];
+    [_recordView stopAnim];
+    [[QLVision sharedInstance] endVideoCapture];
+//    _effectsViewController.view.hidden = YES;
 }
 
 #pragma mark - UIGestureRecognizer
@@ -113,6 +155,60 @@
 - (void)_handlePhotoTapGesterRecognizer:(UIGestureRecognizer *)gestureRecognizer
 {
     [[QLVision sharedInstance] capturePhoto];
+}
+
+- (void)_handleLongPressGestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+{
+    // PHOTO: uncomment to test photo capture
+    //    if (gestureRecognizer.state == UIGestureRecognizerStateBegan) {
+    //        [[PBJVision sharedInstance] capturePhoto];
+    //        return;
+    //    }
+    
+    switch (gestureRecognizer.state) {
+        case UIGestureRecognizerStateBegan:
+        {
+            if (!_recording)
+                [self _startCapture];
+//            else
+//                [self _resumeCapture];
+            break;
+        }
+        case UIGestureRecognizerStateEnded:
+        case UIGestureRecognizerStateCancelled:
+        case UIGestureRecognizerStateFailed:
+        {
+//            [self _pauseCapture];
+            [self _endCapture];
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+- (void)_handleFocusTapGesterRecognizer:(UIGestureRecognizer *)gestureRecognizer
+{
+    CGPoint tapPoint = [gestureRecognizer locationInView:_previewView];
+    
+    // auto focus is occuring, display focus view
+    CGPoint point = tapPoint;
+    
+//    CGRect focusFrame = _focusView.frame;
+//#if defined(__LP64__) && __LP64__
+//    focusFrame.origin.x = rint(point.x - (focusFrame.size.width * 0.5));
+//    focusFrame.origin.y = rint(point.y - (focusFrame.size.height * 0.5));
+//#else
+//    focusFrame.origin.x = rintf(point.x - (focusFrame.size.width * 0.5f));
+//    focusFrame.origin.y = rintf(point.y - (focusFrame.size.height * 0.5f));
+//#endif
+//    [_focusView setFrame:focusFrame];
+//    
+//    [_previewView addSubview:_focusView];
+//    [_focusView startAnimation];
+//    
+//    CGPoint adjustPoint = [PBJVisionUtilities convertToPointOfInterestFromViewCoordinates:tapPoint inFrame:_previewView.frame];
+//    [[QLVision sharedInstance] focusExposeAndAdjustWhiteBalanceAtAdjustedPoint:adjustPoint];
 }
 
 #pragma mark - QLVisionDelegate
@@ -269,5 +365,59 @@
     }];
     
     _currentPhoto = nil;
+}
+
+// video capture
+
+- (void)visionDidStartVideoCapture:(QLVision *)vision
+{
+//    [_strobeView start];
+    _recording = YES;
+}
+
+- (void)visionDidPauseVideoCapture:(QLVision *)vision
+{
+//    [_strobeView stop];
+}
+
+- (void)visionDidResumeVideoCapture:(QLVision *)vision
+{
+//    [_strobeView start];
+}
+
+- (void)vision:(QLVision *)vision capturedVideo:(NSDictionary *)videoDict error:(NSError *)error
+{
+    _recording = NO;
+    
+    if (error && [error.domain isEqual:QLVisionErrorDomain] && error.code == QLVisionErrorCancelled) {
+        NSLog(@"recording session cancelled");
+        return;
+    } else if (error) {
+        NSLog(@"encounted an error in video capture (%@)", error);
+        return;
+    }
+    
+    _currentVideo = videoDict;
+    
+    NSString *videoPath = [_currentVideo  objectForKey:QLVisionVideoPathKey];
+    [_assetLibrary writeVideoAtPathToSavedPhotosAlbum:[NSURL URLWithString:videoPath] completionBlock:^(NSURL *assetURL, NSError *error1) {
+        UIAlertView *alert = [[UIAlertView alloc] initWithTitle: @"Video Saved!" message: @"Saved to the camera roll."
+                                                       delegate:self
+                                              cancelButtonTitle:nil
+                                              otherButtonTitles:@"OK", nil];
+        [alert show];
+    }];
+}
+
+// progress
+
+- (void)vision:(QLVision *)vision didCaptureVideoSampleBuffer:(CMSampleBufferRef)sampleBuffer
+{
+    //    NSLog(@"captured audio (%f) seconds", vision.capturedAudioSeconds);
+}
+
+- (void)vision:(QLVision *)vision didCaptureAudioSample:(CMSampleBufferRef)sampleBuffer
+{
+    //    NSLog(@"captured video (%f) seconds", vision.capturedVideoSeconds);
 }
 @end

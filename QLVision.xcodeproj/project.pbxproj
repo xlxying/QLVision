@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		41021AFA1C912BD70055A0D6 /* OpenGLES.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 41021AF91C912BD70055A0D6 /* OpenGLES.framework */; };
 		414E47CB1C8E753C0032A5FC /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 414E47CA1C8E753C0032A5FC /* main.m */; };
 		414E47CE1C8E753C0032A5FC /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 414E47CD1C8E753C0032A5FC /* AppDelegate.m */; };
 		414E47D11C8E753C0032A5FC /* ViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 414E47D01C8E753C0032A5FC /* ViewController.m */; };
@@ -23,6 +24,7 @@
 		414E480E1C8FF84F0032A5FC /* CoreImage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 414E480D1C8FF84F0032A5FC /* CoreImage.framework */; };
 		414E48111C901BAC0032A5FC /* RecordView.m in Sources */ = {isa = PBXBuildFile; fileRef = 414E48101C901BAC0032A5FC /* RecordView.m */; };
 		414E48161C901E590032A5FC /* UIColor+Hex.m in Sources */ = {isa = PBXBuildFile; fileRef = 414E48151C901E590032A5FC /* UIColor+Hex.m */; };
+		414E48191C9052020032A5FC /* QLMediaWriter.m in Sources */ = {isa = PBXBuildFile; fileRef = 414E48181C9052020032A5FC /* QLMediaWriter.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -43,6 +45,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		41021AF91C912BD70055A0D6 /* OpenGLES.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = OpenGLES.framework; path = System/Library/Frameworks/OpenGLES.framework; sourceTree = SDKROOT; };
 		414E47C61C8E753C0032A5FC /* QLVision.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QLVision.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		414E47CA1C8E753C0032A5FC /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		414E47CC1C8E753C0032A5FC /* AppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; };
@@ -73,6 +76,8 @@
 		414E48101C901BAC0032A5FC /* RecordView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = RecordView.m; sourceTree = "<group>"; };
 		414E48141C901DC70032A5FC /* UIColor+Hex.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "UIColor+Hex.h"; sourceTree = "<group>"; };
 		414E48151C901E590032A5FC /* UIColor+Hex.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = "UIColor+Hex.m"; sourceTree = "<group>"; };
+		414E48171C9052020032A5FC /* QLMediaWriter.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = QLMediaWriter.h; sourceTree = "<group>"; };
+		414E48181C9052020032A5FC /* QLMediaWriter.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = QLMediaWriter.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -80,6 +85,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				41021AFA1C912BD70055A0D6 /* OpenGLES.framework in Frameworks */,
 				414E480E1C8FF84F0032A5FC /* CoreImage.framework in Frameworks */,
 				414E480C1C8FF84A0032A5FC /* ImageIO.framework in Frameworks */,
 				414E48041C8E77EE0032A5FC /* UIKit.framework in Frameworks */,
@@ -108,6 +114,7 @@
 		414E47BD1C8E753C0032A5FC = {
 			isa = PBXGroup;
 			children = (
+				41021AF91C912BD70055A0D6 /* OpenGLES.framework */,
 				414E480D1C8FF84F0032A5FC /* CoreImage.framework */,
 				414E480B1C8FF84A0032A5FC /* ImageIO.framework */,
 				414E48031C8E77EE0032A5FC /* UIKit.framework */,
@@ -184,6 +191,8 @@
 				414E48061C8E78CE0032A5FC /* QLVision.m */,
 				414E48081C8ED6890032A5FC /* QLVisionUtilities.h */,
 				414E48091C8ED6890032A5FC /* QLVisionUtilities.m */,
+				414E48171C9052020032A5FC /* QLMediaWriter.h */,
+				414E48181C9052020032A5FC /* QLMediaWriter.m */,
 			);
 			path = QLVision;
 			sourceTree = "<group>";
@@ -330,6 +339,7 @@
 				414E480A1C8ED6890032A5FC /* QLVisionUtilities.m in Sources */,
 				414E47CE1C8E753C0032A5FC /* AppDelegate.m in Sources */,
 				414E48071C8E78CE0032A5FC /* QLVision.m in Sources */,
+				414E48191C9052020032A5FC /* QLMediaWriter.m in Sources */,
 				414E48161C901E590032A5FC /* UIColor+Hex.m in Sources */,
 				414E47CB1C8E753C0032A5FC /* main.m in Sources */,
 				414E48111C901BAC0032A5FC /* RecordView.m in Sources */,
@@ -552,6 +562,7 @@
 				414E47F51C8E753C0032A5FC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
 		};
 		414E47F61C8E753C0032A5FC /* Build configuration list for PBXNativeTarget "QLVisionTests" */ = {
 			isa = XCConfigurationList;
@@ -560,6 +571,7 @@
 				414E47F81C8E753C0032A5FC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
 		};
 		414E47F91C8E753C0032A5FC /* Build configuration list for PBXNativeTarget "QLVisionUITests" */ = {
 			isa = XCConfigurationList;
@@ -568,6 +580,7 @@
 				414E47FB1C8E753C0032A5FC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};

@@ -7,15 +7,29 @@
 //
 
 #import "RecordView.h"
+@interface RecordView (){
+    int _timeTick;
+    BOOL _isRun;
+    NSTimer *_timer;
+}
+@end
 
 @implementation RecordView
-
+-(void)dealloc{
+    if (_timer) {
+        [_timer invalidate];
+        _timer = nil;
+    }
+}
 - (id)initWithFrame:(CGRect)frame{
     self = [super initWithFrame:frame];
     if (self) {
         self.backgroundColor = [UIColor clearColor];
         _percent = 0;
         _width = 8;
+        _timeTick = 0;
+        _isRun = NO;
+        
     }
     
     return self;
@@ -131,5 +145,32 @@
     NSDictionary *attributes = [NSDictionary dictionaryWithObjectsAndKeys:[UIFont boldSystemFontOfSize:fontSize],NSFontAttributeName,arcColor,NSForegroundColorAttributeName,[UIColor clearColor],NSBackgroundColorAttributeName,paragraph,NSParagraphStyleAttributeName,nil];
     
     [percent drawInRect:CGRectMake(5, (viewSize.height-fontSize)/2, viewSize.width-10, fontSize)withAttributes:attributes];
+}
+
+- (void)startAnim{
+    
+    _timeTick = 601;//60秒倒计时
+    _timer=[NSTimer scheduledTimerWithTimeInterval:0.1 target:self selector:@selector(timeFireMethod) userInfo:nil repeats:YES];
+    _isRun = YES;
+}
+
+- (void)stopAnim{
+    _isRun = NO;
+}
+
+-(void)timeFireMethod
+{
+    
+    _timeTick--;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self setPercent:(601.0-_timeTick)/601.0];
+    });
+    if(_timeTick==0||_isRun==NO){
+        [_timer invalidate];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self setPercent:1.0];
+        });
+    }
+    
 }
 @end

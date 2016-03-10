@@ -23,4 +23,7 @@
 
 //圆环宽度
 @property (assign, nonatomic)float width;
+
+- (void)startAnim;
+- (void)stopAnim;
 @end

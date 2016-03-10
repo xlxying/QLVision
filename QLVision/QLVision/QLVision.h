@@ -41,6 +41,12 @@ typedef NS_ENUM(NSInteger, QLExposureMode) {
     QLExposureModeContinuousAutoExposure = AVCaptureExposureModeContinuousAutoExposure
 };
 
+typedef NS_ENUM(NSInteger, QLAuthorizationStatus) {
+    QLAuthorizationStatusNotDetermined = 0,
+    QLAuthorizationStatusAuthorized,
+    QLAuthorizationStatusAudioDenied
+};
+
 typedef NS_ENUM(NSInteger, QLOutputFormat) {
     QLOutputFormatPreset = 0,
     QLOutputFormatSquare, // 1:1
@@ -62,12 +68,32 @@ typedef NS_ENUM(NSInteger, QLVisionErrorType)
     QLVisionErrorCaptureFailed = 104,
 };
 
+// additional video capture keys
+
+extern NSString * const QLVisionVideoRotation;
+
 // photo dictionary keys
 
 extern NSString * const QLVisionPhotoMetadataKey;
 extern NSString * const QLVisionPhotoJPEGKey;
 extern NSString * const QLVisionPhotoImageKey;
 extern NSString * const QLVisionPhotoThumbnailKey; // 160x120
+
+// video dictionary keys
+
+extern NSString * const QLVisionVideoPathKey;
+extern NSString * const QLVisionVideoThumbnailKey;
+extern NSString * const QLVisionVideoThumbnailArrayKey;
+extern NSString * const QLVisionVideoCapturedDurationKey; // Captured duration in seconds
+
+// suggested videoBitRate constants
+
+static CGFloat const QLVideoBitRate480x360 = 87500 * 8;
+static CGFloat const QLVideoBitRate640x480 = 437500 * 8;
+static CGFloat const QLVideoBitRate1280x720 = 1312500 * 8;
+static CGFloat const QLVideoBitRate1920x1080 = 2975000 * 8;
+static CGFloat const QLVideoBitRate960x540 = 3750000 * 8;
+static CGFloat const QLVideoBitRate1280x750 = 5000000 * 8;
 
 @protocol QLVisionDelegate;
 @interface QLVision : NSObject
@@ -96,6 +122,17 @@ extern NSString * const QLVisionPhotoThumbnailKey; // 160x120
 @property (nonatomic, copy) NSString *captureSessionPreset;
 @property (nonatomic, copy) NSString *captureDirectory;
 @property (nonatomic) QLOutputFormat outputFormat;
+
+// video compression settings
+
+@property (nonatomic) CGFloat videoBitRate;
+@property (nonatomic) NSInteger audioBitRate;
+@property (nonatomic) NSDictionary *additionalCompressionProperties;
+
+// video frame rate (adjustment may change the capture format (AVCaptureDeviceFormat : FoV, zoom factor, etc)
+
+@property (nonatomic) NSInteger videoFrameRate; // desired fps for active cameraDevice
+- (BOOL)supportsVideoFrameRate:(NSInteger)videoFrameRate;
 
 // preview
 
@@ -130,6 +167,41 @@ extern NSString * const QLVisionPhotoThumbnailKey; // 160x120
 
 @property (nonatomic, readonly) BOOL canCapturePhoto;
 - (void)capturePhoto;
+
+// video
+// use pause/resume if a session is in progress, end finalizes that recording session
+
+@property (nonatomic, readonly) BOOL supportsVideoCapture;
+@property (nonatomic, readonly) BOOL canCaptureVideo;
+@property (nonatomic, readonly, getter=isRecording) BOOL recording;
+@property (nonatomic, readonly, getter=isPaused) BOOL paused;
+
+@property (nonatomic, getter=isVideoRenderingEnabled) BOOL videoRenderingEnabled;
+@property (nonatomic, getter=isAudioCaptureEnabled) BOOL audioCaptureEnabled;
+
+@property (nonatomic, readonly) EAGLContext *context;
+@property (nonatomic) CGRect presentationFrame;
+
+@property (nonatomic) CMTime maximumCaptureDuration; // automatically triggers vision:capturedVideo:error: after exceeding threshold, (kCMTimeInvalid records without threshold)
+@property (nonatomic, readonly) Float64 capturedAudioSeconds;
+@property (nonatomic, readonly) Float64 capturedVideoSeconds;
+
+- (void)startVideoCapture;
+- (void)pauseVideoCapture;
+- (void)resumeVideoCapture;
+- (void)endVideoCapture;
+- (void)cancelVideoCapture;
+- (void)captureVideoFrameAsPhoto;
+
+// thumbnails
+
+@property (nonatomic) BOOL thumbnailEnabled; // thumbnail generation, disabling reduces processing time for a photo or video
+@property (nonatomic) BOOL defaultVideoThumbnails; // capture first and last frames of video
+
+- (void)captureCurrentVideoThumbnail;
+- (void)captureVideoThumbnailAtFrame:(int64_t)frame;
+- (void)captureVideoThumbnailAtTime:(Float64)seconds;
+
 @end
 
 @protocol QLVisionDelegate <NSObject>
@@ -155,6 +227,10 @@ extern NSString * const QLVisionPhotoThumbnailKey; // 160x120
 - (void)visionOutputFormatWillChange:(QLVision *)vision;
 - (void)visionOutputFormatDidChange:(QLVision *)vision;
 
+- (void)vision:(QLVision *)vision didChangeCleanAperture:(CGRect)cleanAperture;
+
+- (void)visionDidChangeVideoFormatAndFrameRate:(QLVision *)vision;
+
 // focus / exposure
 
 - (void)visionWillStartFocus:(QLVision *)vision;
@@ -163,6 +239,12 @@ extern NSString * const QLVisionPhotoThumbnailKey; // 160x120
 - (void)visionWillChangeExposure:(QLVision *)vision;
 - (void)visionDidChangeExposure:(QLVision *)vision;
 
+- (void)visionDidChangeFlashMode:(QLVision *)vision; // flash or torch was changed
+
+// authorization / availability
+
+- (void)visionDidChangeAuthorizationStatus:(QLAuthorizationStatus)status;
+- (void)visionDidChangeFlashAvailablility:(QLVision *)vision; // flash or torch is available
 
 // preview
 

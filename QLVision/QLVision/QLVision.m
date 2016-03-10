@@ -8,9 +8,11 @@
 
 #import "QLVision.h"
 #import "QLVisionUtilities.h"
+#import "QLMediaWriter.h"
 
 #import <UIKit/UIKit.h>
 #import <ImageIO/ImageIO.h>
+#import <OpenGLES/EAGL.h>
 
 NSString * const QLVisionErrorDomain = @"QLVisionErrorDomain";
 
@@ -23,6 +25,11 @@ static NSString * const QLVisionFocusObserverContext = @"QLVisionFocusObserverCo
 static NSString * const QLVisionExposureObserverContext = @"QLVisionExposureObserverContext";
 static NSString * const QLVisionWhiteBalanceObserverContext = @"QLVisionWhiteBalanceObserverContext";
 static NSString * const QLVisionCaptureStillImageIsCapturingStillImageObserverContext = @"QLVisionCaptureStillImageIsCapturingStillImageObserverContext";
+
+// additional video capture keys
+
+NSString * const QLVisionVideoRotation = @"QLVisionVideoRotation";
+
 // photo dictionary key definitions
 
 NSString * const QLVisionPhotoMetadataKey = @"QLVisionPhotoMetadataKey";
@@ -30,9 +37,24 @@ NSString * const QLVisionPhotoJPEGKey = @"QLVisionPhotoJPEGKey";
 NSString * const QLVisionPhotoImageKey = @"QLVisionPhotoImageKey";
 NSString * const QLVisionPhotoThumbnailKey = @"QLVisionPhotoThumbnailKey";
 
+// video dictionary key definitions
+
+NSString * const QLVisionVideoPathKey = @"QLVisionVideoPathKey";
+NSString * const QLVisionVideoThumbnailKey = @"QLVisionVideoThumbnailKey";
+NSString * const QLVisionVideoThumbnailArrayKey = @"QLVisionVideoThumbnailArrayKey";
+NSString * const QLVisionVideoCapturedDurationKey = @"QLVisionVideoCapturedDurationKey";
+
+// PBJGLProgram shader uniforms for pixel format conversion on the GPU
+typedef NS_ENUM(GLint, QLVisionUniformLocationTypes)
+{
+    QLVisionUniformY,
+    QLVisionUniformUV,
+    QLVisionUniformCount
+};
+
 @interface QLVision () <
 AVCaptureAudioDataOutputSampleBufferDelegate,
-AVCaptureVideoDataOutputSampleBufferDelegate>
+AVCaptureVideoDataOutputSampleBufferDelegate,QLMediaWriterDelegate>
 {
     //自定义摄像头必要属性
     AVCaptureSession *_captureSession;
@@ -65,10 +87,41 @@ AVCaptureVideoDataOutputSampleBufferDelegate>
     AVCaptureDeviceInput *_currentInput;
     AVCaptureOutput *_currentOutput;
     
+    NSString *_captureSessionPreset;
+    NSString *_captureDirectory;
+    QLOutputFormat _outputFormat;
+    NSMutableSet* _captureThumbnailTimes;
+    NSMutableSet* _captureThumbnailFrames;
+    
     AVCaptureVideoPreviewLayer *_previewLayer;
     
     QLFocusMode _focusMode;//焦点模式
     QLExposureMode _exposureMode;//曝光模式
+    
+    QLMediaWriter *_mediaWriter;
+    
+    CGFloat _videoBitRate;//视频位速率，也叫比特率，表示在单位时间内可以传输多少数据
+    NSInteger _audioBitRate;//音频位速率
+    NSInteger _videoFrameRate;//视频帧速率
+    NSDictionary *_additionalCompressionProperties;//额外的视频压缩属性
+    NSDictionary *_additionalVideoProperties;
+    
+    CMTime _startTimestamp;
+    CMTime _timeOffset;
+    CMTime _maximumCaptureDuration;
+    
+    EAGLContext *_context;
+    CVOpenGLESTextureRef _lumaTexture;
+    CVOpenGLESTextureRef _chromaTexture;
+    CVOpenGLESTextureCacheRef _videoTextureCache;
+    
+    // sample buffer rendering
+    
+    QLCameraDevice _bufferDevice;
+    QLCameraOrientation _bufferOrientation;
+    size_t _bufferWidth;
+    size_t _bufferHeight;
+    CGRect _presentationFrame;
     
     // flags，各种开关，默认都为0
     
@@ -105,9 +158,15 @@ AVCaptureVideoDataOutputSampleBufferDelegate>
 @synthesize focusMode = _focusMode;
 @synthesize exposureMode = _exposureMode;
 @synthesize outputFormat = _outputFormat;
+@synthesize context = _context;
+@synthesize presentationFrame = _presentationFrame;
 @synthesize captureSessionPreset = _captureSessionPreset;
 @synthesize captureDirectory = _captureDirectory;
+@synthesize audioBitRate = _audioBitRate;
+@synthesize videoBitRate = _videoBitRate;
+@synthesize additionalCompressionProperties = _additionalCompressionProperties;
 @synthesize additionalVideoProperties = _additionalVideoProperties;
+@synthesize maximumCaptureDuration = _maximumCaptureDuration;
 
 #pragma mark - singleton
 
@@ -181,6 +240,24 @@ AVCaptureVideoDataOutputSampleBufferDelegate>
 - (BOOL)defaultVideoThumbnails
 {
     return _flags.defaultVideoThumbnails;
+}
+
+- (Float64)capturedAudioSeconds
+{
+    if (_mediaWriter && CMTIME_IS_VALID(_mediaWriter.audioTimestamp)) {
+        return CMTimeGetSeconds(CMTimeSubtract(_mediaWriter.audioTimestamp, _startTimestamp));
+    } else {
+        return 0.0;
+    }
+}
+
+- (Float64)capturedVideoSeconds
+{
+    if (_mediaWriter && CMTIME_IS_VALID(_mediaWriter.videoTimestamp)) {
+        return CMTimeGetSeconds(CMTimeSubtract(_mediaWriter.videoTimestamp, _startTimestamp));
+    } else {
+        return 0.0;
+    }
 }
 
 - (void)setCameraOrientation:(QLCameraOrientation)cameraOrientation
@@ -372,8 +449,106 @@ AVCaptureVideoDataOutputSampleBufferDelegate>
 - (void) _setCurrentDevice:(AVCaptureDevice *)device
 {
     _currentDevice  = device;
-//    _exposureMode   = (PBJExposureMode)device.exposureMode;
-//    _focusMode      = (PBJFocusMode)device.focusMode;
+    _exposureMode   = (QLExposureMode)device.exposureMode;
+    _focusMode      = (QLFocusMode)device.focusMode;
+}
+
+// framerate
+
+- (void)setVideoFrameRate:(NSInteger)videoFrameRate
+{
+    if (![self supportsVideoFrameRate:videoFrameRate]) {
+//        DLog(@"frame rate range not supported for current device format");
+        return;
+    }
+    
+    BOOL isRecording = _flags.recording;
+    if (isRecording) {
+        [self pauseVideoCapture];
+    }
+    
+    CMTime fps = CMTimeMake(1, (int32_t)videoFrameRate);
+    
+    AVCaptureDevice *videoDevice = _currentDevice;
+    AVCaptureDeviceFormat *supportingFormat = nil;
+    int32_t maxWidth = 0;
+    
+    NSArray *formats = [videoDevice formats];
+    for (AVCaptureDeviceFormat *format in formats) {
+        NSArray *videoSupportedFrameRateRanges = format.videoSupportedFrameRateRanges;
+        for (AVFrameRateRange *range in videoSupportedFrameRateRanges) {
+            
+            CMFormatDescriptionRef desc = format.formatDescription;
+            CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(desc);
+            int32_t width = dimensions.width;
+            if (range.minFrameRate <= videoFrameRate && videoFrameRate <= range.maxFrameRate && width >= maxWidth) {
+                supportingFormat = format;
+                maxWidth = width;
+            }
+            
+        }
+    }
+    
+    if (supportingFormat) {
+        NSError *error = nil;
+        [_captureSession beginConfiguration];  // the session to which the receiver's AVCaptureDeviceInput is added.
+        if ([_currentDevice lockForConfiguration:&error]) {
+            [_currentDevice setActiveFormat:supportingFormat];
+            _currentDevice.activeVideoMinFrameDuration = fps;
+            _currentDevice.activeVideoMaxFrameDuration = fps;
+            _videoFrameRate = videoFrameRate;
+            [_currentDevice unlockForConfiguration];
+        } else if (error) {
+            NSLog(@"error locking device for frame rate change (%@)", error);
+        }
+    }
+    [_captureSession commitConfiguration];
+    [self _enqueueBlockOnMainQueue:^{
+        if ([_delegate respondsToSelector:@selector(visionDidChangeVideoFormatAndFrameRate:)])
+            [_delegate visionDidChangeVideoFormatAndFrameRate:self];
+    }];
+    
+    if (isRecording) {
+        [self resumeVideoCapture];
+    }
+}
+
+- (NSInteger)videoFrameRate
+{
+    if (!_currentDevice)
+        return 0;
+    
+    return _currentDevice.activeVideoMaxFrameDuration.timescale;
+}
+
+- (BOOL)supportsVideoFrameRate:(NSInteger)videoFrameRate
+{
+    if (floor(NSFoundationVersionNumber) > NSFoundationVersionNumber_iOS_6_1) {
+        AVCaptureDevice *videoDevice = nil;
+        NSArray *videoDevices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo];
+        NSPredicate *predicate = nil;
+        if (self.cameraDevice == QLCameraDeviceBack) {
+            predicate = [NSPredicate predicateWithFormat:@"position == %i", AVCaptureDevicePositionBack];
+        } else {
+            predicate = [NSPredicate predicateWithFormat:@"position == %i", AVCaptureDevicePositionFront];
+        }
+        NSArray *filteredDevices = [videoDevices filteredArrayUsingPredicate:predicate];
+        if (filteredDevices.count > 0) {
+            videoDevice = filteredDevices.firstObject;
+        } else {
+            return NO;
+        }
+        NSArray *formats = [videoDevice formats];
+        for (AVCaptureDeviceFormat *format in formats) {
+            NSArray *videoSupportedFrameRateRanges = [format videoSupportedFrameRateRanges];
+            for (AVFrameRateRange *frameRateRange in videoSupportedFrameRateRanges) {
+                if ( (frameRateRange.minFrameRate <= videoFrameRate) && (videoFrameRate <= frameRateRange.maxFrameRate) ) {
+                    return YES;
+                }
+            }
+        }
+    }
+    return NO;
 }
 
 #pragma mark - init
@@ -382,6 +557,13 @@ AVCaptureVideoDataOutputSampleBufferDelegate>
 {
     self = [super init];
     if (self) {
+        
+        // setup GLES
+        _context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES2];
+        if (!_context) {
+            NSLog(@"failed to create GL context");
+        }
+//        [self _setupGL];
         
         _captureSessionPreset = AVCaptureSessionPresetMedium;
         _captureDirectory = nil;
@@ -400,6 +582,15 @@ AVCaptureVideoDataOutputSampleBufferDelegate>
         _captureCaptureDispatchQueue = dispatch_queue_create("QLVisionCapture", DISPATCH_QUEUE_SERIAL); // protects capture
         
         _previewLayer = [[AVCaptureVideoPreviewLayer alloc] initWithSession:nil];
+        
+        // Average bytes per second based on video dimensions
+        // lower the bitRate, higher the compression
+        _videoBitRate = QLVideoBitRate640x480;
+        
+        // default audio/video configuration
+        _audioBitRate = 64000;
+        
+        _maximumCaptureDuration = kCMTimeInvalid;
         
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(_applicationWillEnterForeground:) name:UIApplicationWillEnterForegroundNotification object:[UIApplication sharedApplication]];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(_applicationDidEnterBackground:) name:UIApplicationDidEnterBackgroundNotification object:[UIApplication sharedApplication]];
@@ -474,6 +665,9 @@ AVCaptureVideoDataOutputSampleBufferDelegate>
     }
     [_captureOutputVideo setSampleBufferDelegate:self queue:_captureCaptureDispatchQueue];
     
+    // capture device initial settings
+    _videoFrameRate = 30;
+    
     // add notification observers
     NSNotificationCenter *notificationCenter = [NSNotificationCenter defaultCenter];
     
@@ -499,6 +693,14 @@ AVCaptureVideoDataOutputSampleBufferDelegate>
     if (!_captureSession)
         return;
     
+    // current device KVO notifications
+    [self removeObserver:self forKeyPath:@"currentDevice.adjustingFocus"];
+    [self removeObserver:self forKeyPath:@"currentDevice.adjustingExposure"];
+    [self removeObserver:self forKeyPath:@"currentDevice.adjustingWhiteBalance"];
+    
+    // capture events KVO notifications
+    [_captureOutputPhoto removeObserver:self forKeyPath:@"capturingStillImage"];
+    
     // remove notification observers (we don't want to just 'remove all' because we're also observing background notifications
     NSNotificationCenter *notificationCenter = [NSNotificationCenter defaultCenter];
     
@@ -508,6 +710,12 @@ AVCaptureVideoDataOutputSampleBufferDelegate>
     [notificationCenter removeObserver:self name:AVCaptureSessionDidStopRunningNotification object:_captureSession];
     [notificationCenter removeObserver:self name:AVCaptureSessionWasInterruptedNotification object:_captureSession];
     [notificationCenter removeObserver:self name:AVCaptureSessionInterruptionEndedNotification object:_captureSession];
+    
+    // capture input notifications
+    [notificationCenter removeObserver:self name:AVCaptureInputPortFormatDescriptionDidChangeNotification object:nil];
+    
+    // capture device notifications
+    [notificationCenter removeObserver:self name:AVCaptureDeviceSubjectAreaDidChangeNotification object:nil];
     
     _captureOutputPhoto = nil;
     _captureOutputAudio = nil;
@@ -1418,6 +1626,543 @@ typedef void (^QLVisionBlock)();
     }
 }
 
+#pragma mark - video
+
+- (BOOL)supportsVideoCapture
+{
+    return ([[AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo] count] > 0);
+}
+
+- (BOOL)canCaptureVideo
+{
+    BOOL isDiskSpaceAvailable = [QLVisionUtilities availableDiskSpaceInBytes] > QLVisionRequiredMinimumDiskSpaceInBytes;
+    return [self supportsVideoCapture] && [self isCaptureSessionActive] && !_flags.changingModes && isDiskSpaceAvailable;
+}
+
+- (void)startVideoCapture
+{
+    if (![self _canSessionCaptureWithOutput:_currentOutput] || _cameraMode != QLCameraModeVideo) {
+        [self _failVideoCaptureWithErrorCode:QLVisionErrorSessionFailed];
+//        DLog(@"session is not setup properly for capture");
+        return;
+    }
+    
+//    DLog(@"starting video capture");
+    
+    [self _enqueueBlockOnCaptureVideoQueue:^{
+        
+        if (_flags.recording || _flags.paused)
+            return;
+        
+        NSString *guid = [[NSUUID new] UUIDString];
+        NSString *outputFile = [NSString stringWithFormat:@"video_%@.mp4", guid];
+        
+        if ([_delegate respondsToSelector:@selector(vision:willStartVideoCaptureToFile:)]) {
+            outputFile = [_delegate vision:self willStartVideoCaptureToFile:outputFile];
+            
+            if (!outputFile) {
+                [self _failVideoCaptureWithErrorCode:QLVisionErrorBadOutputFile];
+                return;
+            }
+        }
+        
+        NSString *outputDirectory = (_captureDirectory == nil ? NSTemporaryDirectory() : _captureDirectory);
+        NSString *outputPath = [outputDirectory stringByAppendingPathComponent:outputFile];
+        NSURL *outputURL = [NSURL fileURLWithPath:outputPath];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:outputPath]) {
+            NSError *error = nil;
+            if (![[NSFileManager defaultManager] removeItemAtPath:outputPath error:&error]) {
+                [self _failVideoCaptureWithErrorCode:QLVisionErrorOutputFileExists];
+                
+//                DLog(@"could not setup an output file (file exists)");
+                return;
+            }
+        }
+        
+        if (!outputPath || [outputPath length] == 0) {
+            [self _failVideoCaptureWithErrorCode:QLVisionErrorBadOutputFile];
+            
+//            DLog(@"could not setup an output file");
+            return;
+        }
+        
+        if (_mediaWriter) {
+            _mediaWriter.delegate = nil;
+            _mediaWriter = nil;
+        }
+        _mediaWriter = [[QLMediaWriter alloc] initWithOutputURL:outputURL];
+        _mediaWriter.delegate = self;
+        
+        AVCaptureConnection *videoConnection = [_captureOutputVideo connectionWithMediaType:AVMediaTypeVideo];
+        [self _setOrientationForConnection:videoConnection];
+        
+        _startTimestamp = CMClockGetTime(CMClockGetHostTimeClock());
+        _timeOffset = kCMTimeInvalid;
+        
+        _flags.recording = YES;
+        _flags.paused = NO;
+        _flags.interrupted = NO;
+        _flags.videoWritten = NO;
+        
+        _captureThumbnailTimes = [NSMutableSet set];
+        _captureThumbnailFrames = [NSMutableSet set];
+        
+        if (_flags.thumbnailEnabled && _flags.defaultVideoThumbnails) {
+            [self captureVideoThumbnailAtFrame:0];
+        }
+        
+        [self _enqueueBlockOnMainQueue:^{
+            if ([_delegate respondsToSelector:@selector(visionDidStartVideoCapture:)])
+                [_delegate visionDidStartVideoCapture:self];
+        }];
+    }];
+}
+
+- (void)pauseVideoCapture
+{
+    [self _enqueueBlockOnCaptureVideoQueue:^{
+        if (!_flags.recording)
+            return;
+        
+        if (!_mediaWriter) {
+//            DLog(@"media writer unavailable to stop");
+            return;
+        }
+        
+//        DLog(@"pausing video capture");
+        
+        _flags.paused = YES;
+        _flags.interrupted = YES;
+        
+        [self _enqueueBlockOnMainQueue:^{
+            if ([_delegate respondsToSelector:@selector(visionDidPauseVideoCapture:)])
+                [_delegate visionDidPauseVideoCapture:self];
+        }];
+    }];
+}
+
+- (void)resumeVideoCapture
+{
+    [self _enqueueBlockOnCaptureVideoQueue:^{
+        if (!_flags.recording || !_flags.paused)
+            return;
+        
+        if (!_mediaWriter) {
+//            DLog(@"media writer unavailable to resume");
+            return;
+        }
+        
+//        DLog(@"resuming video capture");
+        
+        _flags.paused = NO;
+        
+        [self _enqueueBlockOnMainQueue:^{
+            if ([_delegate respondsToSelector:@selector(visionDidResumeVideoCapture:)])
+                [_delegate visionDidResumeVideoCapture:self];
+        }];
+    }];
+}
+
+- (void)endVideoCapture
+{
+//    DLog(@"ending video capture");
+    
+    [self _enqueueBlockOnCaptureVideoQueue:^{
+        if (!_flags.recording)
+            return;
+        
+        if (!_mediaWriter) {
+//            DLog(@"media writer unavailable to end");
+            return;
+        }
+        
+        _flags.recording = NO;
+        _flags.paused = NO;
+        
+        void (^finishWritingCompletionHandler)(void) = ^{
+            Float64 capturedDuration = self.capturedVideoSeconds;
+            
+            _timeOffset = kCMTimeInvalid;
+            _startTimestamp = CMClockGetTime(CMClockGetHostTimeClock());
+            _flags.interrupted = NO;
+            
+            [self _enqueueBlockOnMainQueue:^{
+                if ([_delegate respondsToSelector:@selector(visionDidEndVideoCapture:)])
+                    [_delegate visionDidEndVideoCapture:self];
+                
+                NSMutableDictionary *videoDict = [[NSMutableDictionary alloc] init];
+                NSString *path = [_mediaWriter.outputURL path];
+                if (path) {
+                    videoDict[QLVisionVideoPathKey] = path;
+                    
+                    if (_flags.thumbnailEnabled) {
+                        if (_flags.defaultVideoThumbnails) {
+                            [self captureVideoThumbnailAtTime:capturedDuration];
+                        }
+                        
+                        [self _generateThumbnailsForVideoWithURL:_mediaWriter.outputURL inDictionary:videoDict];
+                    }
+                }
+                
+                videoDict[QLVisionVideoCapturedDurationKey] = @(capturedDuration);
+                
+                NSError *error = [_mediaWriter error];
+                if ([_delegate respondsToSelector:@selector(vision:capturedVideo:error:)]) {
+                    [_delegate vision:self capturedVideo:videoDict error:error];
+                }
+            }];
+        };
+        [_mediaWriter finishWritingWithCompletionHandler:finishWritingCompletionHandler];
+    }];
+}
+
+- (void)cancelVideoCapture
+{
+//    DLog(@"cancel video capture");
+    
+    [self _enqueueBlockOnCaptureVideoQueue:^{
+        _flags.recording = NO;
+        _flags.paused = NO;
+        
+        [_captureThumbnailTimes removeAllObjects];
+        [_captureThumbnailFrames removeAllObjects];
+        
+        void (^finishWritingCompletionHandler)(void) = ^{
+            _timeOffset = kCMTimeInvalid;
+            _startTimestamp = CMClockGetTime(CMClockGetHostTimeClock());
+            _flags.interrupted = NO;
+            
+            [self _enqueueBlockOnMainQueue:^{
+                NSError *error = [NSError errorWithDomain:QLVisionErrorDomain code:QLVisionErrorCancelled userInfo:nil];
+                if ([_delegate respondsToSelector:@selector(vision:capturedVideo:error:)]) {
+                    [_delegate vision:self capturedVideo:nil error:error];
+                }
+            }];
+        };
+        
+        [_mediaWriter finishWritingWithCompletionHandler:finishWritingCompletionHandler];
+    }];
+}
+
+- (void)captureVideoFrameAsPhoto
+{
+    _flags.videoCaptureFrame = YES;
+}
+
+- (void)captureCurrentVideoThumbnail
+{
+    if (_flags.recording) {
+        [self captureVideoThumbnailAtTime:self.capturedVideoSeconds];
+    }
+}
+
+- (void)captureVideoThumbnailAtTime:(Float64)seconds
+{
+    [_captureThumbnailTimes addObject:@(seconds)];
+}
+
+- (void)captureVideoThumbnailAtFrame:(int64_t)frame
+{
+    [_captureThumbnailFrames addObject:@(frame)];
+}
+
+- (void)_generateThumbnailsForVideoWithURL:(NSURL*)url inDictionary:(NSMutableDictionary*)videoDict
+{
+    if (_captureThumbnailFrames.count == 0 && _captureThumbnailTimes == 0)
+        return;
+    
+    AVURLAsset *asset = [[AVURLAsset alloc] initWithURL:url options:nil];
+    AVAssetImageGenerator *generate = [[AVAssetImageGenerator alloc] initWithAsset:asset];
+    generate.appliesPreferredTrackTransform = YES;
+    
+    int32_t timescale = [@([self videoFrameRate]) intValue];
+    
+    for (NSNumber *frameNumber in [_captureThumbnailFrames allObjects]) {
+        CMTime time = CMTimeMake([frameNumber longLongValue], timescale);
+        Float64 timeInSeconds = CMTimeGetSeconds(time);
+        [self captureVideoThumbnailAtTime:timeInSeconds];
+    }
+    
+    NSMutableArray *captureTimes = [NSMutableArray array];
+    NSArray *thumbnailTimes = [_captureThumbnailTimes allObjects];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wselector"
+    NSArray *sortedThumbnailTimes = [thumbnailTimes sortedArrayUsingSelector:@selector(compare:)];
+#pragma clang diagnostic pop
+    
+    for (NSNumber *seconds in sortedThumbnailTimes) {
+        CMTime time = CMTimeMakeWithSeconds([seconds doubleValue], timescale);
+        [captureTimes addObject:[NSValue valueWithCMTime:time]];
+    }
+    
+    NSMutableArray *thumbnails = [NSMutableArray array];
+    
+    for (NSValue *time in captureTimes) {
+        CGImageRef imgRef = [generate copyCGImageAtTime:[time CMTimeValue] actualTime:NULL error:NULL];
+        if (imgRef) {
+            UIImage *image = [[UIImage alloc] initWithCGImage:imgRef];
+            if (image) {
+                [thumbnails addObject:image];
+            }
+            
+            CGImageRelease(imgRef);
+        }
+    }
+    
+    UIImage *defaultThumbnail = [thumbnails firstObject];
+    if (defaultThumbnail) {
+        [videoDict setObject:defaultThumbnail forKey:QLVisionVideoThumbnailKey];
+    }
+    
+    if (thumbnails.count) {
+        [videoDict setObject:thumbnails forKey:QLVisionVideoThumbnailArrayKey];
+    }
+}
+
+- (void)_failVideoCaptureWithErrorCode:(NSInteger)errorCode
+{
+    if (errorCode && [_delegate respondsToSelector:@selector(vision:capturedVideo:error:)]) {
+        NSError *error = [NSError errorWithDomain:QLVisionErrorDomain code:errorCode userInfo:nil];
+        [_delegate vision:self capturedVideo:nil error:error];
+    }
+}
+
+#pragma mark - media writer setup
+
+- (BOOL)_setupMediaWriterAudioInputWithSampleBuffer:(CMSampleBufferRef)sampleBuffer
+{
+    CMFormatDescriptionRef formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer);
+    //通过sampleBuffer的格式描述创建音频流基本描述
+    const AudioStreamBasicDescription *asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription);
+    if (!asbd) {
+//        DLog(@"audio stream description used with non-audio format description");
+        return NO;
+    }
+    
+    unsigned int channels = asbd->mChannelsPerFrame;//每一帧数据的通道数
+    double sampleRate = asbd->mSampleRate;//采样率,音频采样率是指录音设备在一秒钟内对声音信号的采样次数，采样频率越高声音的还原就越真实越自然
+    
+//    DLog(@"audio stream setup, channels (%d) sampleRate (%f)", channels, sampleRate);
+    //audio channel layout大小
+    size_t aclSize = 0;
+    const AudioChannelLayout *currentChannelLayout = CMAudioFormatDescriptionGetChannelLayout(formatDescription, &aclSize);
+    NSData *currentChannelLayoutData = ( currentChannelLayout && aclSize > 0 ) ? [NSData dataWithBytes:currentChannelLayout length:aclSize] : [NSData data];
+    //最终生成音频压缩设置
+    NSDictionary *audioCompressionSettings = @{ AVFormatIDKey : @(kAudioFormatMPEG4AAC),
+                                                AVNumberOfChannelsKey : @(channels),
+                                                AVSampleRateKey :  @(sampleRate),
+                                                AVEncoderBitRateKey : @(_audioBitRate),
+                                                AVChannelLayoutKey : currentChannelLayoutData };
+    //设置音频writer
+    return [_mediaWriter setupAudioWithSettings:audioCompressionSettings];
+}
+
+- (BOOL)_setupMediaWriterVideoInputWithSampleBuffer:(CMSampleBufferRef)sampleBuffer
+{
+    CMFormatDescriptionRef formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer);
+    //通过sampleBuffer的格式描述创建视频流规格
+    CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(formatDescription);
+    
+    CMVideoDimensions videoDimensions = dimensions;
+    //根据输出格式修改视频规格
+    switch (_outputFormat) {
+        case QLOutputFormatSquare:
+        {
+            int32_t min = MIN(dimensions.width, dimensions.height);
+            videoDimensions.width = min;
+            videoDimensions.height = min;
+            break;
+        }
+        case QLOutputFormatWidescreen:
+        {
+            videoDimensions.width = dimensions.width;
+            videoDimensions.height = (int32_t)(dimensions.width * 9 / 16.0f);
+            break;
+        }
+        case QLOutputFormatStandard:
+        {
+            videoDimensions.width = dimensions.width;
+            videoDimensions.height = (int32_t)(dimensions.width * 3 / 4.0f);
+            break;
+        }
+        case QLOutputFormatPreset:
+        default:
+            break;
+    }
+    //生成视频压缩设置
+    NSDictionary *compressionSettings = nil;
+    //如果有额外压缩设置的话也添加到视频压缩设置中
+    if (_additionalCompressionProperties && [_additionalCompressionProperties count] > 0) {
+        NSMutableDictionary *mutableDictionary = [NSMutableDictionary dictionaryWithDictionary:_additionalCompressionProperties];
+        mutableDictionary[AVVideoAverageBitRateKey] = @(_videoBitRate);
+        mutableDictionary[AVVideoMaxKeyFrameIntervalKey] = @(_videoFrameRate);
+        compressionSettings = mutableDictionary;
+    } else {
+        compressionSettings = @{ AVVideoAverageBitRateKey : @(_videoBitRate),
+                                 AVVideoMaxKeyFrameIntervalKey : @(_videoFrameRate) };
+    }
+    //视频格式设置
+    NSDictionary *videoSettings = @{ AVVideoCodecKey : AVVideoCodecH264,
+                                     AVVideoScalingModeKey : AVVideoScalingModeResizeAspectFill,
+                                     AVVideoWidthKey : @(videoDimensions.width),
+                                     AVVideoHeightKey : @(videoDimensions.height),
+                                     AVVideoCompressionPropertiesKey : compressionSettings };
+    
+    //设置视频writer
+    return [_mediaWriter setupVideoWithSettings:videoSettings withAdditional:[self additionalVideoProperties]];
+}
+
+- (void)_automaticallyEndCaptureIfMaximumDurationReachedWithSampleBuffer:(CMSampleBufferRef)sampleBuffer
+{
+    CMTime currentTimestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+    
+    if (!_flags.interrupted && CMTIME_IS_VALID(currentTimestamp) && CMTIME_IS_VALID(_startTimestamp) && CMTIME_IS_VALID(_maximumCaptureDuration)) {
+        if (CMTIME_IS_VALID(_timeOffset)) {
+            // Current time stamp is actually timstamp with data from globalClock
+            // In case, if we had interruption, then _timeOffset
+            // will have information about the time diff between globalClock and assetWriterClock
+            // So in case if we had interruption we need to remove that offset from "currentTimestamp"
+            currentTimestamp = CMTimeSubtract(currentTimestamp, _timeOffset);
+        }
+        CMTime currentCaptureDuration = CMTimeSubtract(currentTimestamp, _startTimestamp);
+        if (CMTIME_IS_VALID(currentCaptureDuration)) {
+            if (CMTIME_COMPARE_INLINE(currentCaptureDuration, >=, _maximumCaptureDuration)) {
+                [self _enqueueBlockOnMainQueue:^{
+                    [self endVideoCapture];
+                }];
+            }
+        }
+    }
+}
+
+#pragma mark - AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptureVideoDataOutputSampleBufferDelegate
+
+- (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection
+{
+    //保留sampleBuffer
+    CFRetain(sampleBuffer);
+    //判断sampleBuffer是否准备好
+    if (!CMSampleBufferDataIsReady(sampleBuffer)) {
+//        DLog(@"sample buffer data is not ready");
+        CFRelease(sampleBuffer);
+        return;
+    }
+    //判断当前是否应该录制并且未暂停
+    if (!_flags.recording || _flags.paused) {
+        CFRelease(sampleBuffer);
+        return;
+    }
+    //判断mediaWriter是否创建
+    if (!_mediaWriter) {
+        CFRelease(sampleBuffer);
+        return;
+    }
+    
+    // setup media writer
+    BOOL isVideo = (captureOutput == _captureOutputVideo);
+    if (!isVideo && !_mediaWriter.isAudioReady) {
+        [self _setupMediaWriterAudioInputWithSampleBuffer:sampleBuffer];
+//        DLog(@"ready for audio (%d)", _mediaWriter.isAudioReady);
+    }
+    if (isVideo && !_mediaWriter.isVideoReady) {
+        [self _setupMediaWriterVideoInputWithSampleBuffer:sampleBuffer];
+//        DLog(@"ready for video (%d)", _mediaWriter.isVideoReady);
+    }
+    //准备录制，之前设置完以后_mediaWriter的音频和视频录制应该都准备好了
+    BOOL isReadyToRecord = ((!_flags.audioCaptureEnabled || _mediaWriter.isAudioReady) && _mediaWriter.isVideoReady);
+    if (!isReadyToRecord) {
+        CFRelease(sampleBuffer);
+        return;
+    }
+    //应该是获取sampleBuffer最早的时间
+    CMTime currentTimestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+    
+    // calculate the length of the interruption and store the offsets，timeOffset应该是用来计算如果中断的话，中断时和下一次进入代理的时间差采样取出写入，保证视频在中断时如果有部分数据要等下一次采样回来才能填充的完整性。
+    if (_flags.interrupted) {
+        if (isVideo) {
+            CFRelease(sampleBuffer);
+            return;
+        }
+        
+        // calculate the appropriate time offset
+        if (CMTIME_IS_VALID(currentTimestamp) && CMTIME_IS_VALID(_mediaWriter.audioTimestamp)) {
+            if (CMTIME_IS_VALID(_timeOffset)) {
+                currentTimestamp = CMTimeSubtract(currentTimestamp, _timeOffset);
+            }
+            
+            CMTime offset = CMTimeSubtract(currentTimestamp, _mediaWriter.audioTimestamp);
+            _timeOffset = CMTIME_IS_INVALID(_timeOffset) ? offset : CMTimeAdd(_timeOffset, offset);
+//            DLog(@"new calculated offset %f valid (%d)", CMTimeGetSeconds(_timeOffset), CMTIME_IS_VALID(_timeOffset));
+        }
+        _flags.interrupted = NO;
+    }
+    
+    // adjust the sample buffer if there is a time offset
+    CMSampleBufferRef bufferToWrite = NULL;
+    if (CMTIME_IS_VALID(_timeOffset)) {
+        //CMTime duration = CMSampleBufferGetDuration(sampleBuffer);
+        bufferToWrite = [QLVisionUtilities createOffsetSampleBufferWithSampleBuffer:sampleBuffer withTimeOffset:_timeOffset];
+        if (!bufferToWrite) {
+//            DLog(@"error subtracting the timeoffset from the sampleBuffer");
+        }
+    } else {
+        bufferToWrite = sampleBuffer;
+        CFRetain(bufferToWrite);
+    }
+    
+    // write the sample buffer
+    if (bufferToWrite && !_flags.interrupted) {
+        
+        if (isVideo) {
+            
+            [_mediaWriter writeSampleBuffer:bufferToWrite withMediaTypeVideo:isVideo];
+            
+            _flags.videoWritten = YES;
+            
+            // process the sample buffer for rendering onion layer or capturing video photo
+            if ( (_flags.videoRenderingEnabled || _flags.videoCaptureFrame) && _flags.videoWritten) {
+                [self _executeBlockOnMainQueue:^{
+//                    [self _processSampleBuffer:bufferToWrite];
+                    
+                    if (_flags.videoCaptureFrame) {
+                        _flags.videoCaptureFrame = NO;
+                        [self _willCapturePhoto];
+//                        [self _capturePhotoFromSampleBuffer:bufferToWrite];
+                        [self _didCapturePhoto];
+                    }
+                }];
+            }
+            
+            [self _enqueueBlockOnMainQueue:^{
+                if ([_delegate respondsToSelector:@selector(vision:didCaptureVideoSampleBuffer:)]) {
+                    [_delegate vision:self didCaptureVideoSampleBuffer:bufferToWrite];
+                }
+            }];
+            
+        } else if (!isVideo && _flags.videoWritten) {
+            
+            [_mediaWriter writeSampleBuffer:bufferToWrite withMediaTypeVideo:isVideo];
+            
+            [self _enqueueBlockOnMainQueue:^{
+                if ([_delegate respondsToSelector:@selector(vision:didCaptureAudioSample:)]) {
+                    [_delegate vision:self didCaptureAudioSample:bufferToWrite];
+                }
+            }];
+            
+        }
+        
+    }
+    
+    [self _automaticallyEndCaptureIfMaximumDurationReachedWithSampleBuffer:sampleBuffer];
+    
+    if (bufferToWrite) {
+        CFRelease(bufferToWrite);
+    }
+    
+    CFRelease(sampleBuffer);
+    
+}
+
 #pragma mark - App NSNotifications
 
 - (void)_applicationWillEnterForeground:(NSNotification *)notification
@@ -1617,4 +2362,205 @@ typedef void (^QLVisionBlock)();
         [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
     }
 }
+
+#pragma mark - sample buffer processing
+
+// convert CoreVideo YUV pixel buffer (Y luminance and Cb Cr chroma) into RGB
+// processing is done on the GPU, operation WAY more efficient than converting on the CPU
+//- (void)_processSampleBuffer:(CMSampleBufferRef)sampleBuffer
+//{
+//    if (!_context)
+//        return;
+//    
+//    if (!_videoTextureCache)
+//        return;
+//    
+//    CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+//    
+//    if (CVPixelBufferLockBaseAddress(imageBuffer, 0) != kCVReturnSuccess)
+//        return;
+//    
+//    [EAGLContext setCurrentContext:_context];
+//    
+//    [self _cleanUpTextures];
+//    
+//    size_t width = CVPixelBufferGetWidth(imageBuffer);
+//    size_t height = CVPixelBufferGetHeight(imageBuffer);
+//    
+//    // only bind the vertices once or if parameters change
+//    
+//    if (_bufferWidth != width ||
+//        _bufferHeight != height ||
+//        _bufferDevice != _cameraDevice ||
+//        _bufferOrientation != _cameraOrientation) {
+//        
+//        _bufferWidth = width;
+//        _bufferHeight = height;
+//        _bufferDevice = _cameraDevice;
+//        _bufferOrientation = _cameraOrientation;
+//        [self _setupBuffers];
+//        
+//    }
+//    
+//    // always upload the texturs since the input may be changing
+//    
+//    CVReturn error = 0;
+//    
+//    // Y-plane
+//    glActiveTexture(GL_TEXTURE0);
+//    error = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
+//                                                         _videoTextureCache,
+//                                                         imageBuffer,
+//                                                         NULL,
+//                                                         GL_TEXTURE_2D,
+//                                                         GL_RED_EXT,
+//                                                         (GLsizei)_bufferWidth,
+//                                                         (GLsizei)_bufferHeight,
+//                                                         GL_RED_EXT,
+//                                                         GL_UNSIGNED_BYTE,
+//                                                         0,
+//                                                         &_lumaTexture);
+//    if (error) {
+//        DLog(@"error CVOpenGLESTextureCacheCreateTextureFromImage (%d)", error);
+//    }
+//    
+//    glBindTexture(CVOpenGLESTextureGetTarget(_lumaTexture), CVOpenGLESTextureGetName(_lumaTexture));
+//    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+//    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+//    
+//    // UV-plane
+//    glActiveTexture(GL_TEXTURE1);
+//    error = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault,
+//                                                         _videoTextureCache,
+//                                                         imageBuffer,
+//                                                         NULL,
+//                                                         GL_TEXTURE_2D,
+//                                                         GL_RG_EXT,
+//                                                         (GLsizei)(_bufferWidth * 0.5),
+//                                                         (GLsizei)(_bufferHeight * 0.5),
+//                                                         GL_RG_EXT,
+//                                                         GL_UNSIGNED_BYTE,
+//                                                         1,
+//                                                         &_chromaTexture);
+//    if (error) {
+//        DLog(@"error CVOpenGLESTextureCacheCreateTextureFromImage (%d)", error);
+//    }
+//    
+//    glBindTexture(CVOpenGLESTextureGetTarget(_chromaTexture), CVOpenGLESTextureGetName(_chromaTexture));
+//    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+//    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+//    
+//    if (CVPixelBufferUnlockBaseAddress(imageBuffer, 0) != kCVReturnSuccess)
+//        return;
+//    
+//    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+//}
+
+- (void)_cleanUpTextures
+{
+    CVOpenGLESTextureCacheFlush(_videoTextureCache, 0);
+    
+    if (_lumaTexture) {
+        CFRelease(_lumaTexture);
+        _lumaTexture = NULL;
+    }
+    
+    if (_chromaTexture) {
+        CFRelease(_chromaTexture);
+        _chromaTexture = NULL;
+    }
+}
+
+#pragma mark - OpenGLES context support
+
+//- (void)_setupBuffers
+//{
+//    
+//    // unit square for testing
+//    //    static const GLfloat unitSquareVertices[] = {
+//    //        -1.0f, -1.0f,
+//    //        1.0f, -1.0f,
+//    //        -1.0f,  1.0f,
+//    //        1.0f,  1.0f,
+//    //    };
+//    
+//    CGSize inputSize = CGSizeMake(_bufferWidth, _bufferHeight);
+//    CGRect insetRect = AVMakeRectWithAspectRatioInsideRect(inputSize, _presentationFrame);
+//    
+//    CGFloat widthScale = CGRectGetHeight(_presentationFrame) / CGRectGetHeight(insetRect);
+//    CGFloat heightScale = CGRectGetWidth(_presentationFrame) / CGRectGetWidth(insetRect);
+//    
+//    static GLfloat vertices[8];
+//    
+//    vertices[0] = (GLfloat) -widthScale;
+//    vertices[1] = (GLfloat) -heightScale;
+//    vertices[2] = (GLfloat) widthScale;
+//    vertices[3] = (GLfloat) -heightScale;
+//    vertices[4] = (GLfloat) -widthScale;
+//    vertices[5] = (GLfloat) heightScale;
+//    vertices[6] = (GLfloat) widthScale;
+//    vertices[7] = (GLfloat) heightScale;
+//    
+//    static const GLfloat textureCoordinates[] = {
+//        0.0f, 1.0f,
+//        1.0f, 1.0f,
+//        0.0f, 0.0f,
+//        1.0f, 0.0f,
+//    };
+//    
+//    static const GLfloat textureCoordinatesVerticalFlip[] = {
+//        1.0f, 1.0f,
+//        0.0f, 1.0f,
+//        1.0f, 0.0f,
+//        0.0f, 0.0f,
+//    };
+//    
+//    GLuint vertexAttributeLocation = [_program attributeLocation:PBJGLProgramAttributeVertex];
+//    GLuint textureAttributeLocation = [_program attributeLocation:PBJGLProgramAttributeTextureCoord];
+//    
+//    glEnableVertexAttribArray(vertexAttributeLocation);
+//    glVertexAttribPointer(vertexAttributeLocation, 2, GL_FLOAT, GL_FALSE, 0, vertices);
+//    
+//    if (_cameraDevice == PBJCameraDeviceFront) {
+//        glEnableVertexAttribArray(textureAttributeLocation);
+//        glVertexAttribPointer(textureAttributeLocation, 2, GL_FLOAT, GL_FALSE, 0, textureCoordinatesVerticalFlip);
+//    } else {
+//        glEnableVertexAttribArray(textureAttributeLocation);
+//        glVertexAttribPointer(textureAttributeLocation, 2, GL_FLOAT, GL_FALSE, 0, textureCoordinates);
+//    }
+//}
+
+//- (void)_setupGL
+//{
+//    static GLint uniforms[QLVisionUniformCount];
+//    
+//    [EAGLContext setCurrentContext:_context];
+//    
+//    NSBundle *bundle = [NSBundle bundleForClass:[QLVision class]];
+//    
+//    NSString *vertShaderName = [bundle pathForResource:@"Shader" ofType:@"vsh"];
+//    NSString *fragShaderName = [bundle pathForResource:@"Shader" ofType:@"fsh"];
+//    _program = [[QLGLProgram alloc] initWithVertexShaderName:vertShaderName fragmentShaderName:fragShaderName];
+//    [_program addAttribute:PBJGLProgramAttributeVertex];
+//    [_program addAttribute:PBJGLProgramAttributeTextureCoord];
+//    [_program link];
+//    
+//    uniforms[QLVisionUniformY] = [_program uniformLocation:@"u_samplerY"];
+//    uniforms[QLVisionUniformUV] = [_program uniformLocation:@"u_samplerUV"];
+//    [_program use];
+//    
+//    glUniform1i(uniforms[PBJVisionUniformY], 0);
+//    glUniform1i(uniforms[PBJVisionUniformUV], 1);
+//}
+
+//- (void)_destroyGL
+//{
+//    [EAGLContext setCurrentContext:_context];
+//    
+//    _program = nil;
+//    
+//    if ([EAGLContext currentContext] == _context) {
+//        [EAGLContext setCurrentContext:nil];
+//    }
+//}
 @end
